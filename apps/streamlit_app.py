@@ -1,178 +1,182 @@
-import warnings
+from __future__ import annotations
+
 import os
 import sys
+from dataclasses import asdict
 from pathlib import Path
+from typing import Dict, List, MutableMapping
 
+import fitz
 import streamlit as st
 from dotenv import load_dotenv
-import fitz
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from rag_genai_core.config import PAGE_DPI
-from rag_genai_core.rag_pipeline import build_rag_pipeline
-from apps.html_files import css, bot_template, user_template
+from rag_genai_core.catalog import load_catalog, validate_catalog
+from rag_genai_core.config import Settings
+from rag_genai_core.exceptions import ManualAssistantError
+from rag_genai_core.observability import configure_logging
+from rag_genai_core.runtime import build_runtime
+from rag_genai_core.schemas import ChatTurn
 
-# Suppress noisy warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
-# Load environment variables at startup
 load_dotenv(ROOT / ".env")
+configure_logging()
+SETTINGS = Settings.from_env()
 
 
-def handle_userinput(user_question):
-    if st.session_state.conversation is None:
-        st.error("Please upload and process PDFs first!")
-        return
-
-    response = st.session_state.conversation({"question": user_question})
-    st.session_state.chat_history = response["chat_history"]
-    st.session_state.chat_sources.append(response.get("source_documents", []))
+@st.cache_resource(show_spinner=False)
+def cached_runtime(manual_id: str):
+    return build_runtime(manual_id, SETTINGS)
 
 
-def render_source_preview(doc):
-    source_name = doc.metadata.get("source", "Unknown")
-    page_number = doc.metadata.get("page")
-    if page_number:
-        st.info(f"**Arquivo:** {source_name} (page {page_number})")
-    else:
-        st.info(f"**Arquivo:** {source_name}")
-
-    if page_number and source_name in st.session_state.pdf_bytes:
-        cache_key = (source_name, page_number)
-        image_bytes = st.session_state.page_images.get(cache_key)
-        if image_bytes is None:
-            pdf_doc = None
-            try:
-                pdf_stream = st.session_state.pdf_bytes[source_name]
-                pdf_doc = fitz.open(stream=pdf_stream, filetype="pdf")
-                page = pdf_doc.load_page(page_number - 1)
-                pix = page.get_pixmap(dpi=PAGE_DPI)
-                image_bytes = pix.tobytes("png")
-                st.session_state.page_images[cache_key] = image_bytes
-            except Exception:
-                image_bytes = None
-            finally:
-                if pdf_doc is not None:
-                    try:
-                        pdf_doc.close()
-                    except Exception:
-                        pass
-        if image_bytes:
-            st.image(image_bytes, caption=f"{source_name} - page {page_number}")
+@st.cache_data(show_spinner=False)
+def render_page(pdf_path: str, physical_page: int, dpi: int) -> bytes:
+    with fitz.open(pdf_path) as document:
+        page = document.load_page(physical_page - 1)
+        return page.get_pixmap(dpi=dpi, alpha=False).tobytes("png")
 
 
-def main():
-    st.set_page_config(page_title="Chat with multiple PDFs", page_icon=":books:")
-    st.write(css, unsafe_allow_html=True)
+@st.cache_data(show_spinner=False)
+def single_page_pdf(pdf_path: str, physical_page: int) -> bytes:
+    with fitz.open(pdf_path) as source:
+        output = fitz.open()
+        output.insert_pdf(source, from_page=physical_page - 1, to_page=physical_page - 1)
+        data = output.tobytes()
+        output.close()
+        return data
 
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = None
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = None
-    if "last_question" not in st.session_state:
-        st.session_state.last_question = ""
-    if "chat_sources" not in st.session_state:
-        st.session_state.chat_sources = []
-    if "pdf_bytes" not in st.session_state:
-        st.session_state.pdf_bytes = {}
-    if "page_images" not in st.session_state:
-        st.session_state.page_images = {}
-    if "process_status" not in st.session_state:
-        st.session_state.process_status = None
-    if "process_message" not in st.session_state:
-        st.session_state.process_message = None
-    if "process_warnings" not in st.session_state:
-        st.session_state.process_warnings = []
 
-    def handle_question():
-        if st.session_state.question_input:
-            handle_userinput(st.session_state.question_input)
-            st.session_state.last_question = st.session_state.question_input
-            st.session_state.question_input = ""
+def clear_manual_context(state: MutableMapping[str, object]) -> None:
+    state["messages"] = []
+    state["active_manual_id"] = None
 
-    st.header("Chat with multiple PDFs :books:")
 
-    st.text_input(
-        "Ask a question about your documents:",
-        key="question_input",
-        on_change=handle_question,
+def reset_conversation() -> None:
+    clear_manual_context(st.session_state)
+
+
+def initialize_state() -> None:
+    st.session_state.setdefault("messages", [])
+    st.session_state.setdefault("selected_manual_id", "")
+    st.session_state.setdefault("active_manual_id", None)
+
+
+def render_sources(sources: List[Dict[str, object]], record, key_prefix: str) -> None:
+    for source in sources:
+        printed = f"; printed page {source['printed_page']}" if source.get("printed_page") else ""
+        label = f"[{source['source_id']}] PDF page {source['physical_page']}{printed}"
+        with st.expander(label):
+            st.code(source["evidence"], language=None)
+            page_number = int(source["physical_page"])
+            st.image(render_page(str(record.pdf_path), page_number, SETTINGS.page_dpi), use_column_width=True)
+            st.download_button(
+                "Open original page",
+                data=single_page_pdf(str(record.pdf_path), page_number),
+                file_name=f"{record.manual_id}-page-{page_number}.pdf",
+                mime="application/pdf",
+                key=f"page-{key_prefix}-{source['chunk_id']}",
+            )
+
+
+def main() -> None:
+    st.set_page_config(page_title="Motorcycle Manual Assistant", page_icon="🏍️", layout="wide")
+    initialize_state()
+    st.title(" 🏍️ Motorcycle Manual Assistant 🔧")
+    st.caption(
+        "Answers use the available manual edition. Verify critical specifications in the cited source."
     )
-    if st.session_state.conversation is None:
-        st.info("Upload and process your PDFs to start asking questions.")
 
-    st.markdown("---")
+    try:
+        catalog = load_catalog(SETTINGS.catalog_path, SETTINGS.root_dir)
+        validate_catalog(catalog.values())
+    except ManualAssistantError as exc:
+        st.error(str(exc))
+        st.stop()
 
-    if st.session_state.conversation is not None and st.session_state.chat_history:
-        sources_rev = list(reversed(st.session_state.chat_sources))
-        source_idx = 0
-        for i, message in enumerate(reversed(st.session_state.chat_history)):
-            if i % 2 == 0:
-                st.write(
-                    bot_template.replace("{{MSG}}", message.content),
-                    unsafe_allow_html=True,
-                )
-                if source_idx < len(sources_rev) and sources_rev[source_idx]:
-                    render_source_preview(sources_rev[source_idx][0])
-                source_idx += 1
-            else:
-                st.write(
-                    user_template.replace("{{MSG}}", message.content),
-                    unsafe_allow_html=True,
-                )
+    choices = [""] + list(catalog)
+    labels = {"": "Select your motorcycle"}
+    labels.update({manual_id: record.display_name for manual_id, record in catalog.items()})
+    selected = st.sidebar.selectbox(
+        "Motorcycle",
+        choices,
+        format_func=lambda value: labels[value],
+        key="selected_manual_id",
+        on_change=reset_conversation,
+    )
+    if not selected:
+        st.info("Please select a motorcycle model to begin.")
+        st.stop()
 
-    with st.sidebar:
-        st.subheader("Your documents")
-        pdf_docs = st.file_uploader(
-            "Upload your PDFs here and click on 'Process'",
-            accept_multiple_files=True,
-        )
-        if st.button("Process"):
-            if not pdf_docs:
-                st.session_state.process_status = "error"
-                st.session_state.process_message = "Please upload at least one PDF file!"
-            elif not os.getenv("OPENAI_API_KEY"):
-                st.session_state.process_status = "error"
-                st.session_state.process_message = (
-                    "OPENAI_API_KEY is not set. Add it to a .env file in the project root."
-                )
-            else:
-                with st.spinner("Processing"):
-                    st.session_state.pdf_bytes = {pdf.name: pdf.getvalue() for pdf in pdf_docs}
-                    st.session_state.page_images = {}
-                    st.session_state.chat_sources = []
-                    st.session_state.chat_history = None
-                    st.session_state.last_question = ""
-                    st.session_state.process_warnings = []
+    record = catalog[selected]
+    st.sidebar.subheader(record.display_name)
+    st.sidebar.write(record.title)
+    st.sidebar.caption(
+        f"Edition: {record.edition} · Model year: {record.model_year} · Market: {record.market}"
+    )
+    st.info(f"Current manual: **{record.title}**")
 
-                    conversation_chain, vectorstore, empty_files = build_rag_pipeline(pdf_docs)
-                    if empty_files:
-                        st.session_state.process_warnings = empty_files
-                    if not conversation_chain:
-                        st.session_state.process_status = "error"
-                        st.session_state.process_message = (
-                            "No text could be extracted from the uploaded PDFs."
-                        )
-                    else:
-                        st.session_state.conversation = conversation_chain
-                        st.session_state.vectorstore = vectorstore
-                        st.session_state.process_status = "success"
-                        st.session_state.process_message = (
-                            "Processing complete! You can now ask questions about your documents."
-                        )
+    examples = {
+        "yamaha-tenere-700-xtz690d-2022-04-en": [
+            "What is the drive chain slack specification?",
+            "What are the cold tire pressures for off-road riding?",
+            "What is the fuel tank capacity?",
+        ],
+        "voge-500ds-en-unknown-edition": [
+            "What are the tire pressures for a rider and passenger?",
+            "What is the fuel tank capacity?",
+            "What is the engine oil capacity?",
+        ],
+    }
+    with st.sidebar.expander("Example questions"):
+        for example in examples[selected]:
+            st.write(f"• {example}")
 
-        if st.session_state.process_warnings:
-            st.warning("No extractable text found in: " + ", ".join(st.session_state.process_warnings))
-        if st.session_state.process_status == "error" and st.session_state.process_message:
-            st.error(st.session_state.process_message)
-        if st.session_state.process_status == "success" and st.session_state.process_message:
-            st.success(st.session_state.process_message)
+    for message_index, message in enumerate(st.session_state.messages):
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if message["role"] == "assistant" and message.get("conditions"):
+                st.caption("Conditions: " + "; ".join(message["conditions"]))
+            if message.get("sources"):
+                render_sources(message["sources"], record, f"history-{message_index}")
+
+    question = st.chat_input("Ask a question about the selected motorcycle manual")
+    if not question:
+        return
+    st.session_state.messages.append({"role": "user", "content": question})
+    with st.chat_message("user"):
+        st.markdown(question)
+    with st.chat_message("assistant"):
+        if not os.getenv("OPENAI_API_KEY"):
+            st.error("OPENAI_API_KEY is not configured. Add it to .env before asking questions.")
+            st.session_state.messages.pop()
+            return
+        try:
+            with st.spinner("Checking the manual..."):
+                pipeline = cached_runtime(selected)
+                history = [ChatTurn(item["role"], item["content"]) for item in st.session_state.messages[:-1]]
+                response = pipeline.ask(question, history)
+            st.markdown(response.answer)
+            if response.conditions:
+                st.caption("Conditions: " + "; ".join(response.conditions))
+            serialized_sources = [asdict(source) for source in response.sources]
+            if serialized_sources:
+                render_sources(serialized_sources, record, response.request_id)
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": response.answer,
+                    "status": response.status.value,
+                    "conditions": response.conditions,
+                    "sources": serialized_sources,
+                }
+            )
+            st.session_state.active_manual_id = selected
+        except ManualAssistantError as exc:
+            st.error(str(exc))
+            st.session_state.messages.pop()
 
 
 if __name__ == "__main__":

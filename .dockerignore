@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+.vscode
+.env
+artifacts
+docs/*.pdf
+evals/reports
+tests
+__pycache__
+*.pyc

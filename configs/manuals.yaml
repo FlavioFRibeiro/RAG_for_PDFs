@@ -1,0 +1,30 @@
+version: 1
+manuals:
+  - manual_id: yamaha-tenere-700-xtz690d-2022-04-en
+    motorcycle_id: yamaha-tenere-700
+    manufacturer: Yamaha
+    model: Ténéré 700 World Raid (XTZ690D)
+    model_year: unknown
+    edition: First edition, April 2022
+    market: Europe and UK content present; exact market variant unknown
+    language: English
+    title: Yamaha XTZ690D (Ténéré 700) Owner's Manual
+    pdf_path: docs/Manual Tenere 700.pdf
+    sha256: b704eed96bf5b229f9458303e06718f2506ef84eadd975972b35a34e0a2432fa
+    origin: unknown
+    redistribution: Copyright notice prohibits unauthorized reprinting or use; keep local unless permission is confirmed.
+    identity_basis: Internal cover and copyright page identify XTZ690D, first edition April 2022.
+  - manual_id: voge-500ds-en-unknown-edition
+    motorcycle_id: voge-500ds
+    manufacturer: Voge
+    model: 500DS
+    model_year: unknown
+    edition: unknown
+    market: unknown
+    language: English
+    title: Voge 500DS User Manual
+    pdf_path: docs/VOGE_500_DS.pdf
+    sha256: c20eb837879252fe8628ab1fb299f85c14e5a0a08c50823ef9d0a71914921f5c
+    origin: unknown
+    redistribution: unknown; keep local unless permission is confirmed.
+    identity_basis: Model identity confirmed by the repository maintainer; the inspected internal pages identify Voge but do not print 500DS.

@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motorcycle-manual-assistant"
+version = "2.0.0"
+description = "Evidence-based RAG assistant for a controlled catalog of motorcycle manuals"
+requires-python = ">=3.9,<3.10"
+dependencies = [
+  "faiss-cpu==1.7.4",
+  "numpy==1.26.4",
+  "openai==2.48.0",
+  "pydantic==2.13.5",
+  "PyMuPDF==1.26.5",
+  "PyYAML==6.0.3",
+  "python-dotenv==1.0.0",
+  "streamlit==1.28.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.4.2", "ruff==0.14.2"]
+
+[project.scripts]
+motorcycle-manual-assistant = "rag_genai_core.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+markers = ["manuals: requires the locally licensed PDF manuals"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"apps/streamlit_app.py" = ["E402"]

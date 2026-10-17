@@ -49,6 +49,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.pytest_tmp/
 cover/
 
 # Translations
@@ -121,12 +122,21 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Local manuals and generated RAG artifacts
+docs/*.pdf
+artifacts/
+evals/reports/*.json
+evals/reports/*.md
+!evals/reports/baseline-summary.md
 
 # Spyder project settings
 .spyderproject
