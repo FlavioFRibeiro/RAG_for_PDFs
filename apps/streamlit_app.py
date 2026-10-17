@@ -19,6 +19,7 @@ from rag_genai_core.catalog import load_catalog, validate_catalog
 from rag_genai_core.config import Settings
 from rag_genai_core.exceptions import ManualAssistantError
 from rag_genai_core.observability import configure_logging
+from rag_genai_core.pdf_preview import render_source_page, source_answer_text
 from rag_genai_core.runtime import build_runtime
 from rag_genai_core.schemas import ChatTurn
 
@@ -33,10 +34,11 @@ def cached_runtime(manual_id: str):
 
 
 @st.cache_data(show_spinner=False)
-def render_page(pdf_path: str, physical_page: int, dpi: int) -> bytes:
-    with fitz.open(pdf_path) as document:
-        page = document.load_page(physical_page - 1)
-        return page.get_pixmap(dpi=dpi, alpha=False).tobytes("png")
+def render_highlighted_page(
+    pdf_path: str, physical_page: int, evidence: str, focus_text: str, dpi: int, pdf_hash: str
+):
+    # Include the catalog hash in the cache key when a local manual is replaced.
+    return render_source_page(pdf_path, physical_page, evidence, focus_text, dpi)
 
 
 @st.cache_data(show_spinner=False)
@@ -64,14 +66,28 @@ def initialize_state() -> None:
     st.session_state.setdefault("active_manual_id", None)
 
 
-def render_sources(sources: List[Dict[str, object]], record, key_prefix: str) -> None:
+def render_sources(sources: List[Dict[str, object]], record, key_prefix: str, focus_text: str = "") -> None:
     for source in sources:
         printed = f"; printed page {source['printed_page']}" if source.get("printed_page") else ""
         label = f"[{source['source_id']}] PDF page {source['physical_page']}{printed}"
         with st.expander(label):
-            st.code(source["evidence"], language=None)
             page_number = int(source["physical_page"])
-            st.image(render_page(str(record.pdf_path), page_number, SETTINGS.page_dpi), use_column_width=True)
+            evidence = str(source["evidence"])
+            preview = render_highlighted_page(
+                str(record.pdf_path),
+                page_number,
+                evidence,
+                source_answer_text(focus_text, str(source["source_id"])),
+                SETTINGS.page_dpi,
+                record.sha256,
+            )
+            st.image(preview.image, use_column_width=True)
+            if preview.highlight_count:
+                st.caption("Full manual page. Yellow highlights mark matching answer details.")
+            else:
+                st.caption(
+                    "The cited page is shown, but the evidence text could not be located precisely for highlighting."
+                )
             st.download_button(
                 "Open original page",
                 data=single_page_pdf(str(record.pdf_path), page_number),
@@ -140,7 +156,7 @@ def main() -> None:
             if message["role"] == "assistant" and message.get("conditions"):
                 st.caption("Conditions: " + "; ".join(message["conditions"]))
             if message.get("sources"):
-                render_sources(message["sources"], record, f"history-{message_index}")
+                render_sources(message["sources"], record, f"history-{message_index}", message["content"])
 
     question = st.chat_input("Ask a question about the selected motorcycle manual")
     if not question:
@@ -163,7 +179,7 @@ def main() -> None:
                 st.caption("Conditions: " + "; ".join(response.conditions))
             serialized_sources = [asdict(source) for source in response.sources]
             if serialized_sources:
-                render_sources(serialized_sources, record, response.request_id)
+                render_sources(serialized_sources, record, response.request_id, response.answer)
             st.session_state.messages.append(
                 {
                     "role": "assistant",

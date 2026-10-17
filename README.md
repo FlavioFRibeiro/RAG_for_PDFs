@@ -81,7 +81,9 @@ For the Yamaha manual, a supported answer can take this form:
 
 > The specified drive-chain distance A is 40.0-45.0 mm (1.57-1.77 in). Check it with the motorcycle on its sidestand, in neutral, and with no weight on the motorcycle. [S1]
 
-`[S1]` expands to the exact excerpt, physical PDF page, optional printed page, and an original one-page PDF. The wording shown here is documentation, not a recorded live-model result.
+`[S1]` expands to the full physical PDF page, optional printed page label, and an original one-page PDF download. Yellow highlights locate matching answer details without cropping the page or showing the raw chunk text. The wording shown here is documentation, not a recorded live-model result.
+
+Highlights match quantities (value and unit) against both the cited evidence and the answer associated with that source. Short exact phrases can be marked for non-numeric answers. Unsupported or unlocatable text produces an unmarked full page; matching is a navigation aid, not proof of semantic correctness. No additional API call or reindexing is required.
 
 ## Add a manual
 
